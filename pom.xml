@@ -65,7 +65,7 @@
     <httpclient-version>4.5.14</httpclient-version>
     <httpcore-version>4.4.16</httpcore-version>
     <insight-version>1.2.0.Beta4</insight-version>
-    <jackson-version>2.17.0</jackson-version>
+    <jackson-version>2.17.1</jackson-version>
     <jakarta-jms-api-version>3.1.0</jakarta-jms-api-version>
     <jasypt-version>1.9.3</jasypt-version>
     <jaxb-version>4.0.2</jaxb-version>
@@ -85,7 +85,7 @@
     <karaf-version>4.3.7</karaf-version>
     <log4j-version>2.23.1</log4j-version>
     <mockito-version>4.8.1</mockito-version>
-    <owasp-dependency-check-version>8.4.2</owasp-dependency-check-version>
+    <owasp-dependency-check-version>9.2.0</owasp-dependency-check-version>
     <mqtt-client-version>1.16</mqtt-client-version>
     <org-apache-derby-version>10.16.1.1</org-apache-derby-version>
     <osgi-version>6.0.0</osgi-version>
@@ -103,7 +103,7 @@
     <velocity-version>2.3</velocity-version>
     <xpp3-version>1.1.4c</xpp3-version>
     <xstream-version>1.4.20</xstream-version>
-    <xbean-version>4.24</xbean-version>
+    <xbean-version>4.25</xbean-version>
     <xerces-version>2.12.2</xerces-version>
     <jaxb-tools-version>4.0.0</jaxb-tools-version>
     <stompjms-version>3.1.0</stompjms-version>
