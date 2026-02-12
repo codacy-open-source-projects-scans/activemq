@@ -14,27 +14,14 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.activemq.pool;
+package org.apache.activemq.store.kahadb.disk.journal;
 
-import jakarta.jms.Connection;
+import java.io.File;
 
-import org.junit.Test;
+public class DefaultDataFileFactory implements DataFileFactory {
 
-import static junit.framework.Assert.assertNotNull;
-
-public class ConfigFromPropsTest {
-
-    @Test
-    public void testBrokerUrlForRarAdminObject() throws Exception {
-        final XaPooledConnectionFactory underTest = new XaPooledConnectionFactory();
-        try {
-            underTest.setBrokerUrl("vm://configFromPropsTest?broker.persistent=false");
-            final Connection connection = underTest.createConnection();
-            assertNotNull(connection);
-            connection.close();
-            assertNotNull(underTest.getBrokerUrl());
-        } finally {
-            underTest.stop();
-        }
+    @Override
+    public DataFile create(File file, int number) {
+        return new DataFile(file, number);
     }
 }
