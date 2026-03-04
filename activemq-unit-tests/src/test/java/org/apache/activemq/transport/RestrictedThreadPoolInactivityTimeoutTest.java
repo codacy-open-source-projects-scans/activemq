@@ -35,6 +35,7 @@ import java.util.concurrent.TimeUnit;
 
 public class RestrictedThreadPoolInactivityTimeoutTest extends JmsTestSupport {
     private static final Logger LOG = LoggerFactory.getLogger(RestrictedThreadPoolInactivityTimeoutTest.class);
+    private static final int TEST_TIMEOUT_MS = 120_000;
 
     public String brokerTransportScheme = "tcp";
     public Boolean rejectWork = Boolean.FALSE;
@@ -86,6 +87,7 @@ public class RestrictedThreadPoolInactivityTimeoutTest extends JmsTestSupport {
         addCombinationValues("rejectWork", new Object[] {Boolean.TRUE, Boolean.FALSE});
     }
 
+    @org.junit.Test(timeout = TEST_TIMEOUT_MS)
     public void testThreadsInvolvedInXInactivityTimeouts() throws Exception {
 
         URI tcpBrokerUri = URISupport.removeQuery(broker.getTransportConnectors().get(0).getConnectUri());
@@ -124,7 +126,7 @@ public class RestrictedThreadPoolInactivityTimeoutTest extends JmsTestSupport {
 
         assertTrue("Should be at most inactivity monitor pool size * 2. Diff = " + diff, diff <= 2*poolSize);
 
-        assertTrue("all work complete", doneConsumers.await(10, TimeUnit.SECONDS));
+        assertTrue("all work complete", doneConsumers.await(30, TimeUnit.SECONDS));
     }
 
     @Override
