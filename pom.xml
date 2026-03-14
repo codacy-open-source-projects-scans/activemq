@@ -98,7 +98,7 @@
     <shiro-version>2.1.0</shiro-version>
     <slf4j-version>2.0.17</slf4j-version>
     <snappy-version>1.1.2</snappy-version>
-    <spring-version>6.2.16</spring-version>
+    <spring-version>6.2.17</spring-version>
     <spring-version-range>[6,7)</spring-version-range>
     <taglibs-version>1.2.5</taglibs-version>
     <xpp3-version>1.1.4c</xpp3-version>
@@ -133,9 +133,11 @@
     <sonar-maven-plugin-version>5.5.0.6356</sonar-maven-plugin-version>
     <tools-maven-plugin-version>1.4</tools-maven-plugin-version>
     <depends-maven-plugin-version>1.5.0</depends-maven-plugin-version>
+    <docker-maven-plugin-version>0.45.1</docker-maven-plugin-version>
+    <docker-java-version>17</docker-java-version>
     <maven-project-info-reports-plugin-version>3.9.0</maven-project-info-reports-plugin-version>
     <maven-graph-plugin-version>1.45</maven-graph-plugin-version>
-    <maven-core-version>3.9.12</maven-core-version>
+    <maven-core-version>3.9.14</maven-core-version>
     <maven-surefire-plugin-version>3.5.3</maven-surefire-plugin-version>
     <maven-surefire-junit5-tree-reporter-version>1.5.1</maven-surefire-junit5-tree-reporter-version>
     <!-- OSGi bundles properties -->
@@ -981,6 +983,7 @@
             <forkCount>1</forkCount>
             <reuseForks>false</reuseForks>
             <forkedProcessTimeoutInSeconds>${surefire.forkedProcessTimeout}</forkedProcessTimeoutInSeconds>
+            <enableProcessChecker>all</enableProcessChecker>
             <failIfNoTests>false</failIfNoTests>
             <systemPropertyVariables>
                 <java.awt.headless>true</java.awt.headless>
