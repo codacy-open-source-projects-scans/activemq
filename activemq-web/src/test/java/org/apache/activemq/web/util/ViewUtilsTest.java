@@ -1,4 +1,4 @@
-/**
+/*
  * Licensed to the Apache Software Foundation (ASF) under one or more
  * contributor license agreements.  See the NOTICE file distributed with
  * this work for additional information regarding copyright ownership.
@@ -14,40 +14,26 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.activemq.transport;
+package org.apache.activemq.web.util;
+
+import static org.junit.Assert.assertEquals;
 
 import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import org.apache.commons.text.StringEscapeUtils;
+import org.junit.Test;
 
+public class ViewUtilsTest {
 
-/**
- * An asynchronous listener of commands
- *
- * 
- */
-public interface TransportListener {
-    
-    /**
-     * called to process a command
-     * @param command
-     */
-    void onCommand(Object command);
-    /**
-     * An unrecoverable exception has occurred on the transport
-     * @param error
-     */
-    void onException(IOException error);
-    
-    /**
-     * The transport has suffered an interuption from which it hopes to recover
-     *
-     */
-    void transportInterupted();
-    
-    
-    /**
-     * The transport has resumed after an interuption
-     *
-     */
-    void transportResumed();
-    
+    @Test
+    public void testXmlEscape() throws IOException {
+        final String original = Files.readString(Path.of("src/test/resources/activemq.xml"));
+        final String escaped = ViewUtils.escapeXml(original);
+
+        // Verify that our escape method matches StringEscapeUtils
+        assertEquals(StringEscapeUtils.escapeXml11(original), ViewUtils.escapeXml(original));
+        // Verify if we unescape we get back the original
+        assertEquals(original, StringEscapeUtils.unescapeXml(escaped));
+    }
 }
