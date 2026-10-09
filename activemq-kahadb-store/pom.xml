@@ -22,7 +22,7 @@
   <parent>
     <groupId>org.apache.activemq</groupId>
     <artifactId>activemq-parent</artifactId>
-    <version>6.3.0-SNAPSHOT</version>
+    <version>6.4.0-SNAPSHOT</version>
   </parent>
 
   <artifactId>activemq-kahadb-store</artifactId>
@@ -195,7 +195,7 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
-        <version>${surefire.version}</version>
+        <version>${maven-surefire-plugin-version}</version>
         <configuration>
           <argLine>${surefire.argLine}</argLine>
           <runOrder>alphabetical</runOrder>
@@ -251,7 +251,7 @@
           <dependency>
             <groupId>org.apache.maven.surefire</groupId>
             <artifactId>surefire-junit47</artifactId>
-            <version>${surefire.version}</version>
+            <version>${maven-surefire-plugin-version}</version>
           </dependency>
           <dependency>
             <groupId>me.fabriciorby</groupId>

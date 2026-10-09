@@ -16,16 +16,18 @@
  */
 package org.apache.activemq;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.List;
 import javax.management.ObjectName;
 import org.apache.activemq.network.DiscoveryNetworkConnector;
+import org.apache.activemq.network.NetworkConnector;
 import org.apache.activemq.plugin.RuntimeConfigurationBroker;
 import org.apache.activemq.plugin.jmx.RuntimeConfigurationViewMBean;
 import org.apache.activemq.util.IntrospectionSupport;
 import org.apache.activemq.util.Wait;
 import org.junit.Ignore;
 import org.junit.Test;
-
 
 import static org.junit.Assert.*;
 
@@ -67,7 +69,6 @@ public class SpringBeanTest extends RuntimeConfigTestSupport {
         assertEquals("modified is same", props.get(propOfInterest), propsAfter.get(propOfInterest));
     }
 
-
     @Test
     public void testAddPropertyRef() throws Exception {
 
@@ -77,7 +78,7 @@ public class SpringBeanTest extends RuntimeConfigTestSupport {
         startBroker(brokerConfig);
         assertTrue("broker alive", brokerService.isStarted());
 
-        applyNewConfig(brokerConfig, "emptyUpdatableConfig1000-spring-property-nc", SLEEP);
+        applyNewConfig(brokerConfig, "emptyUpdatableConfig1000-spring-property-nc", WAIT_FOR_CHANGE);
 
         assertTrue("new network connectors", Wait.waitFor(new Wait.Condition() {
             @Override
@@ -101,7 +102,7 @@ public class SpringBeanTest extends RuntimeConfigTestSupport {
         startBroker(brokerConfig);
         assertTrue("broker alive", brokerService.isStarted());
 
-        applyNewConfig(brokerConfig, "emptyUpdatableConfig1000-spring-property-file-nc", SLEEP);
+        applyNewConfig(brokerConfig, "emptyUpdatableConfig1000-spring-property-file-nc", WAIT_FOR_CHANGE);
 
         assertTrue("new network connectors", Wait.waitFor(new Wait.Condition() {
             @Override
@@ -141,7 +142,49 @@ public class SpringBeanTest extends RuntimeConfigTestSupport {
 
         assertNotEquals("unknown", props.get(propOfInterest));
 
+    }
 
+    @Test
+    public void testRemovePropertyRefNetworkConnector() throws Exception {
+
+        System.setProperty("network.uri", "static:(tcp://localhost:8888)");
+        System.setProperty("network.user", "guest");
+        System.setProperty("network.password", "secret");
+
+        final String brokerConfig = "SpringPropertyRemoveTest-broker";
+        applyNewConfig(brokerConfig, "emptyUpdatableConfig1000-spring-property-two-nc");
+        startBroker(brokerConfig);
+        assertTrue("broker alive", brokerService.isStarted());
+        assertEquals("two network connectors", 2, brokerService.getNetworkConnectors().size());
+
+        for (DiscoveryNetworkConnector nc : asDiscoveryConnectors(brokerService.getNetworkConnectors())) {
+            assertEquals("uri resolved", System.getProperty("network.uri"), nc.getUri().toASCIIString());
+            assertEquals("userName resolved", System.getProperty("network.user"), nc.getUserName());
+            assertEquals("password resolved", System.getProperty("network.password"), nc.getPassword());
+        }
+
+        applyNewConfig(brokerConfig, "emptyUpdatableConfig1000-spring-property-one-nc", WAIT_FOR_CHANGE);
+
+        assertTrue("one network connector remains", Wait.waitFor(new Wait.Condition() {
+            @Override
+            public boolean isSatisified() throws Exception {
+                return 1 == brokerService.getNetworkConnectors().size();
+            }
+        }));
+
+        DiscoveryNetworkConnector remaining = (DiscoveryNetworkConnector) brokerService.getNetworkConnectors().get(0);
+        assertEquals("kept the one named 'one'", "one", remaining.getName());
+        assertEquals("uri still resolved", System.getProperty("network.uri"), remaining.getUri().toASCIIString());
+        assertEquals("userName still resolved", System.getProperty("network.user"), remaining.getUserName());
+        assertEquals("password still resolved", System.getProperty("network.password"), remaining.getPassword());
+    }
+
+    private static List<DiscoveryNetworkConnector> asDiscoveryConnectors(List<NetworkConnector> connectors) {
+        List<DiscoveryNetworkConnector> result = new ArrayList<>(connectors.size());
+        for (NetworkConnector nc : connectors) {
+            result.add((DiscoveryNetworkConnector) nc);
+        }
+        return result;
     }
 
     @Test
@@ -170,7 +213,7 @@ public class SpringBeanTest extends RuntimeConfigTestSupport {
 
         assertEquals("our custom prop is applied", "isKing", brokerService.getBrokerName());
 
-        applyNewConfig(brokerConfig, "spring-property-file-list-and-beanFactory-new-nc", SLEEP);
+        applyNewConfig(brokerConfig, "spring-property-file-list-and-beanFactory-new-nc", WAIT_FOR_CHANGE);
 
         assertTrue("new network connectors", Wait.waitFor(new Wait.Condition() {
             @Override

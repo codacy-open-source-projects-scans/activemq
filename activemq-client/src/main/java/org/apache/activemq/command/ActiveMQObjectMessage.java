@@ -38,6 +38,7 @@ import org.apache.activemq.util.ByteArrayOutputStream;
 import org.apache.activemq.util.ByteSequence;
 import org.apache.activemq.util.ClassLoadingAwareObjectInputStream;
 import org.apache.activemq.util.JMSExceptionSupport;
+import org.apache.activemq.util.MarshallingSupport;
 import org.apache.activemq.wireformat.WireFormat;
 
 /**
@@ -208,7 +209,8 @@ public class ActiveMQObjectMessage extends ActiveMQMessage implements ObjectMess
             try {
                 InputStream is = new ByteArrayInputStream(content);
                 if (isCompressed()) {
-                    is = new InflaterInputStream(is);
+                    // wrap the stream so we don't inflate past maxInflatedDataSize
+                    is = MarshallingSupport.createInflaterInputStream(getMaxInflatedDataSize(), is);
                 }
                 DataInputStream dataIn = new DataInputStream(is);
                 ClassLoadingAwareObjectInputStream objIn = new ClassLoadingAwareObjectInputStream(dataIn);
@@ -288,8 +290,15 @@ public class ActiveMQObjectMessage extends ActiveMQMessage implements ObjectMess
     }
 
     @Override
-    public boolean isBodyAssignableTo(Class c) throws JMSException {
-        final Serializable object = getObject();
+    public boolean isBodyAssignableTo(Class c) {
+        final Serializable object;
+        try {
+            object = getObject();
+        } catch (JMSException e) {
+            // Per Jakarta Messaging 3.1: if the message is an ObjectMessage
+            // and object deserialization fails then false is returned.
+            return false;
+        }
         if (object == null) {
             return true;
         }

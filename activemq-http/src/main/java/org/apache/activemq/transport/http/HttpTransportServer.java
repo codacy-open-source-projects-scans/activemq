@@ -27,16 +27,19 @@ import org.apache.activemq.transport.WebTransportServerSupport;
 import org.apache.activemq.transport.util.TextWireFormat;
 import org.apache.activemq.transport.xstream.XStreamWireFormat;
 import org.apache.activemq.util.ServiceStopper;
-import org.eclipse.jetty.security.ConstraintSecurityHandler;
+import org.eclipse.jetty.ee11.servlet.security.ConstraintSecurityHandler;
 import org.eclipse.jetty.server.ConnectionFactory;
 import org.eclipse.jetty.server.Connector;
+import org.eclipse.jetty.server.Handler;
 import org.eclipse.jetty.server.HttpConnectionFactory;
 import org.eclipse.jetty.server.Server;
-import org.eclipse.jetty.server.handler.HandlerWrapper;
-import org.eclipse.jetty.servlet.ServletContextHandler;
-import org.eclipse.jetty.servlet.ServletHolder;
+import org.eclipse.jetty.server.Handler.Wrapper;
+import org.eclipse.jetty.ee11.servlet.ServletContextHandler;
+import org.eclipse.jetty.ee11.servlet.ServletHolder;
 
 public class HttpTransportServer extends WebTransportServerSupport {
+
+    private HttpTunnelServlet tunnelServlet;
 
     private TextWireFormat wireFormat;
     private final HttpTransportFactory transportFactory;
@@ -91,11 +94,15 @@ public class HttpTransportServer extends WebTransportServerSupport {
 
         URI boundTo = bind();
 
+        // EE11 dropped the (Server, contextPath, options) constructor (no nested layer); create the
+        // context then set it as the server handler explicitly.
         ServletContextHandler contextHandler =
-            new ServletContextHandler(server, "/", ServletContextHandler.SECURITY);
+            new ServletContextHandler("/", ServletContextHandler.SECURITY);
+        server.setHandler(contextHandler);
 
         ServletHolder holder = new ServletHolder();
-        holder.setServlet(new HttpTunnelServlet());
+        tunnelServlet = new HttpTunnelServlet();
+        holder.setServlet(tunnelServlet);
         contextHandler.addServlet(holder, "/");
 
         contextHandler.setAttribute("acceptListener", getAcceptListener());
@@ -135,11 +142,11 @@ public class HttpTransportServer extends WebTransportServerSupport {
     }
 
     private void addGzipHandler(ServletContextHandler contextHandler) throws Exception {
-        HandlerWrapper handler = null;
+        Handler.Wrapper handler = null;
         try {
-            handler = (HandlerWrapper) forName("org.eclipse.jetty.servlets.gzip.GzipHandler").getConstructor().newInstance();
+            handler = (Handler.Wrapper) forName("org.eclipse.jetty.servlets.gzip.GzipHandler").getConstructor().newInstance();
         } catch (Throwable t) {
-            handler = (HandlerWrapper) forName("org.eclipse.jetty.server.handler.gzip.GzipHandler").getConstructor().newInstance();
+            handler = (Handler.Wrapper) forName("org.eclipse.jetty.server.handler.gzip.GzipHandler").getConstructor().newInstance();
         }
         contextHandler.insertHandler(handler);
     }
@@ -166,6 +173,11 @@ public class HttpTransportServer extends WebTransportServerSupport {
         Server temp = server;
         server = null;
         if (temp != null) {
+            // wake every waiting long poll first so graceful shutdown has nothing to wait for
+            HttpTunnelServlet servlet = tunnelServlet;
+            if (servlet != null) {
+                servlet.releaseClients();
+            }
             temp.stop();
         }
     }

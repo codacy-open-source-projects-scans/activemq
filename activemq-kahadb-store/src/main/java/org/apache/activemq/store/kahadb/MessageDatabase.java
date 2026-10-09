@@ -97,6 +97,7 @@ import org.apache.activemq.store.kahadb.disk.journal.Location;
 import org.apache.activemq.store.kahadb.disk.journal.TargetedDataFileAppender;
 import org.apache.activemq.store.kahadb.disk.page.Page;
 import org.apache.activemq.store.kahadb.disk.page.PageFile;
+import org.apache.activemq.store.kahadb.disk.page.PageFile.PageFileCompactionStrategy;
 import org.apache.activemq.store.kahadb.disk.page.Transaction;
 import org.apache.activemq.store.kahadb.disk.util.LocationMarshaller;
 import org.apache.activemq.store.kahadb.disk.util.LongMarshaller;
@@ -138,7 +139,7 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
 
     static final byte COMPACTED_JOURNAL_FILE = DataFile.STANDARD_LOG_FILE + 1;
 
-    class Metadata {
+    protected class Metadata {
         protected Page<Metadata> page;
         protected int state;
         protected BTreeIndex<String, StoredDestination> destinations;
@@ -225,6 +226,20 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
             }
             os.writeInt(this.openwireVersion);
         }
+
+        // Accessors for lastUpdate, the most recent journal location applied
+        // to the index. A KahaDBStore subclass in another package can reach
+        // the protected metadata field of the outer class, but not the fields
+        // of this nested class, so a subclass that updates the index itself
+        // (for example after applying buffered transaction operations) needs
+        // these.
+        public Location getLastUpdate() {
+            return lastUpdate;
+        }
+
+        public void setLastUpdate(Location lastUpdate) {
+            this.lastUpdate = lastUpdate;
+        }
     }
 
     class MetadataMarshaller extends VariableMarshaller<Metadata> {
@@ -249,7 +264,7 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
 
     protected PageFile pageFile;
     protected Journal journal;
-    Metadata metadata = new Metadata();
+    protected Metadata metadata = new Metadata();
     protected final PersistenceAdapterStatistics persistenceAdapterStatistics = new PersistenceAdapterStatistics();
 
     MetadataMarshaller metadataMarshaller = new MetadataMarshaller();
@@ -291,6 +306,9 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
     private boolean enableIndexDiskSyncs = true;
     private boolean enableIndexRecoveryFile = true;
     private boolean enableIndexPageCaching = true;
+    private PageFileCompactionStrategy indexCompactionStrategy = PageFileCompactionStrategy.NEVER;
+    private float minFreePageCompactionRatio = .1F;
+    private float maxFreePageCompactionRatio = .3F;
     ReentrantReadWriteLock checkpointLock = new ReentrantReadWriteLock();
 
     private boolean enableAckCompaction = true;
@@ -1258,7 +1276,7 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
     }
 
     @SuppressWarnings("rawtypes")
-    void process(final KahaAddMessageCommand command, final Location location, final IndexAware runWithIndexLock) throws IOException {
+    protected void process(final KahaAddMessageCommand command, final Location location, final IndexAware runWithIndexLock) throws IOException {
         if (command.hasTransactionInfo()) {
             List<Operation> inflightTx = getInflightTx(command.getTransactionInfo());
             inflightTx.add(new AddOperation(command, location, runWithIndexLock));
@@ -1334,7 +1352,7 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
     }
 
     @SuppressWarnings("rawtypes")
-    void process(KahaCommitCommand command, final Location location, final IndexAware before) throws IOException {
+    protected void process(KahaCommitCommand command, final Location location, final IndexAware before) throws IOException {
         TransactionId key = TransactionIdConversion.convert(command.getTransactionInfo());
         List<Operation> inflightTx;
         synchronized (inflightTransactions) {
@@ -1432,7 +1450,7 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
 
     protected final ReentrantLock indexLock = new ReentrantLock();
 
-    long updateIndex(Transaction tx, KahaAddMessageCommand command, Location location) throws IOException {
+    protected long updateIndex(Transaction tx, KahaAddMessageCommand command, Location location) throws IOException {
         StoredDestination sd = getExistingStoredDestination(command.getDestination(), tx);
         if (sd == null) {
             // if the store no longer exists, skip
@@ -1498,7 +1516,7 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
         }
     }
 
-    void updateIndex(Transaction tx, KahaUpdateMessageCommand updateMessageCommand, Location location) throws IOException {
+    protected void updateIndex(Transaction tx, KahaUpdateMessageCommand updateMessageCommand, Location location) throws IOException {
         KahaAddMessageCommand command = updateMessageCommand.getMessage();
         StoredDestination sd = getStoredDestination(command.getDestination(), tx);
 
@@ -1541,7 +1559,7 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
         }
     }
 
-    void updateIndex(Transaction tx, KahaRemoveMessageCommand command, Location ackLocation) throws IOException {
+    protected void updateIndex(Transaction tx, KahaRemoveMessageCommand command, Location ackLocation) throws IOException {
         StoredDestination sd = getStoredDestination(command.getDestination(), tx);
         if (!command.hasSubscriptionKey()) {
 
@@ -1590,7 +1608,13 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
         }
     }
 
-    private void recordAckMessageReferenceLocation(Location ackLocation, Location messageLocation) {
+    /**
+     * Records that the journal file holding the given ack references the
+     * journal file holding the acked message. The ackMessageFileMap is
+     * guarded by the index lock: every reader and writer, including the ack
+     * compaction task, must hold that lock.
+     */
+    protected void recordAckMessageReferenceLocation(Location ackLocation, Location messageLocation) {
         Set<Integer> referenceFileIds = metadata.ackMessageFileMap.get(ackLocation.getDataFileId());
         if (referenceFileIds == null) {
             referenceFileIds = new HashSet<>();
@@ -1606,7 +1630,7 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
         }
     }
 
-    void updateIndex(Transaction tx, KahaRemoveDestinationCommand command) throws IOException {
+    protected void updateIndex(Transaction tx, KahaRemoveDestinationCommand command) throws IOException {
         StoredDestination sd = getStoredDestination(command.getDestination(), tx);
         sd.orderIndex.remove(tx);
 
@@ -1646,7 +1670,7 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
         storeCache.remove(key(command.getDestination()));
     }
 
-    void updateIndex(Transaction tx, KahaSubscriptionCommand command, Location location) throws IOException {
+    protected void updateIndex(Transaction tx, KahaSubscriptionCommand command, Location location) throws IOException {
         StoredDestination sd = getStoredDestination(command.getDestination(), tx);
         final String subscriptionKey = command.getSubscriptionKey();
 
@@ -1699,6 +1723,8 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
                 Set<Integer> filesToGc = pageFile.tx().execute((Transaction.CallableClosure<Set<Integer>, IOException>)
                         tx -> checkpointUpdate(tx, cleanup));
                 pageFile.flush();
+                pageFile.compact();
+
                 // after the index update such that partial removal does not leave dangling references in the index.
                 journal.removeDataFiles(filesToGc);
             } finally {
@@ -1839,8 +1865,10 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
                         int dataFileId = subscription.getValue().getDataFileId();
 
                         // Move subscription along if it has no outstanding messages that need ack'd
-                        // and its in the last log file in the journal.
-                        if (!gcCandidateSet.isEmpty() && gcCandidateSet.first() == dataFileId) {
+                        // and the file the command is written to is part of the gcCandidateSet
+                        // This will prevent the subscription from blocking the file from being GC'd
+                        // if otherwise eligible
+                        if (gcCandidateSet.contains(dataFileId)) {
                             final StoredDestination destination = entry.getValue();
                             final String subscriptionKey = subscription.getKey();
                             SequenceSet pendingAcks = destination.ackPositions.get(tx, subscriptionKey);
@@ -3179,7 +3207,7 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
     @SuppressWarnings("rawtypes")
     private final LinkedHashMap<TransactionId, List<Operation>> inflightTransactions = new LinkedHashMap<>();
     @SuppressWarnings("rawtypes")
-    final LinkedHashMap<TransactionId, List<Operation>> preparedTransactions = new LinkedHashMap<>();
+    protected final LinkedHashMap<TransactionId, List<Operation>> preparedTransactions = new LinkedHashMap<>();
 
     @SuppressWarnings("rawtypes")
     private List<Operation> getInflightTx(KahaTransactionInfo info) {
@@ -3197,7 +3225,7 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
         return TransactionIdConversion.convert(transactionInfo);
     }
 
-    abstract static class Operation <T extends JournalCommand<T>> {
+    protected abstract static class Operation <T extends JournalCommand<T>> {
         final T command;
         final Location location;
 
@@ -3217,7 +3245,7 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
         abstract public void execute(Transaction tx) throws IOException;
     }
 
-    class AddOperation extends Operation<KahaAddMessageCommand> {
+    protected class AddOperation extends Operation<KahaAddMessageCommand> {
         final IndexAware runWithIndexLock;
         public AddOperation(KahaAddMessageCommand command, Location location, IndexAware runWithIndexLock) {
             super(command, location);
@@ -3233,7 +3261,7 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
         }
     }
 
-    class RemoveOperation extends Operation<KahaRemoveMessageCommand> {
+    protected class RemoveOperation extends Operation<KahaRemoveMessageCommand> {
 
         public RemoveOperation(KahaRemoveMessageCommand command, Location location) {
             super(command, location);
@@ -3263,6 +3291,9 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
         index.setEnableDiskSyncs(isEnableIndexDiskSyncs());
         index.setEnableRecoveryFile(isEnableIndexRecoveryFile());
         index.setEnablePageCaching(isEnableIndexPageCaching());
+        index.setCompactionStrategy(getIndexCompactionStrategy());
+        index.setMaxFreePageCompactionRatio(getMaxFreePageCompactionRatio());
+        index.setMinFreePageCompactionRatio(getMinFreePageCompactionRatio());
         return index;
     }
 
@@ -3848,12 +3879,26 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
             }
         }
 
+        /**
+         * Iterate and record the last visited sequence keys
+         * (lastDefaultKey/lastHighKey/lastLowKey) so that a subsequent
+         * {@link #stoppedIterating()} advances the destination cursor past the
+         * visited messages.
+         */
         Iterator<Entry<Long, MessageKeys>> iterator(Transaction tx) throws IOException{
             return new MessageOrderIterator(tx,cursor,this);
         }
 
         Iterator<Entry<Long, MessageKeys>> iterator(Transaction tx, MessageOrderCursor m) throws IOException{
             return new MessageOrderIterator(tx,m,this);
+        }
+
+        Iterator<Entry<Long, MessageKeys>> iteratorIsolated(Transaction tx) throws IOException{
+            return iteratorIsolated(tx, new MessageOrderCursor());
+        }
+
+        Iterator<Entry<Long, MessageKeys>> iteratorIsolated(Transaction tx, MessageOrderCursor m) throws IOException{
+            return new IsolatedMessageOrderIterator(tx, m, this);
         }
 
         public byte lastGetPriority() {
@@ -3888,100 +3933,134 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
             }
         }
 
-        class MessageOrderIterator implements Iterator<Entry<Long, MessageKeys>>{
-            Iterator<Entry<Long, MessageKeys>>currentIterator;
-            final Iterator<Entry<Long, MessageKeys>>highIterator;
-            final Iterator<Entry<Long, MessageKeys>>defaultIterator;
-            final Iterator<Entry<Long, MessageKeys>>lowIterator;
+    }
 
-            MessageOrderIterator(Transaction tx, MessageOrderCursor m, MessageOrderIndex messageOrderIndex) throws IOException {
-                Long pendingAddLimiter = messageOrderIndex.minPendingAdd();
-                this.defaultIterator = defaultPriorityIndex.iterator(tx, m.defaultCursorPosition, pendingAddLimiter);
-                if (highPriorityIndex != null) {
-                    this.highIterator = highPriorityIndex.iterator(tx, m.highPriorityCursorPosition, pendingAddLimiter);
-                } else {
-                    this.highIterator = null;
-                }
-                if (lowPriorityIndex != null) {
-                    this.lowIterator = lowPriorityIndex.iterator(tx, m.lowPriorityCursorPosition, pendingAddLimiter);
-                } else {
-                    this.lowIterator = null;
-                }
+    /**
+     * Read-only iterator over a {@link MessageOrderIndex}'s three priority
+     * tiers (high, default, low).  Does not record lastDefaultKey /
+     * lastHighKey / lastLowKey bookmarks, so a subsequent
+     * {@link MessageOrderIndex#stoppedIterating()} is a no-op with respect
+     * to cursor advancement.
+     *
+     * <p>Use this variant for browses, statistics scans and any other
+     * iteration that must not affect the destination cursor.
+     */
+    static class IsolatedMessageOrderIterator implements Iterator<Entry<Long, MessageKeys>> {
+        Iterator<Entry<Long, MessageKeys>> currentIterator;
+        final Iterator<Entry<Long, MessageKeys>> highIterator;
+        final Iterator<Entry<Long, MessageKeys>> defaultIterator;
+        final Iterator<Entry<Long, MessageKeys>> lowIterator;
+
+        IsolatedMessageOrderIterator(Transaction tx, MessageOrderCursor m,
+                MessageOrderIndex orderIndex) throws IOException {
+            Long pendingAddLimiter = orderIndex.minPendingAdd();
+            this.defaultIterator = orderIndex.defaultPriorityIndex.iterator(tx, m.defaultCursorPosition, pendingAddLimiter);
+            if (orderIndex.highPriorityIndex != null) {
+                this.highIterator = orderIndex.highPriorityIndex.iterator(tx, m.highPriorityCursorPosition, pendingAddLimiter);
+            } else {
+                this.highIterator = null;
             }
+            if (orderIndex.lowPriorityIndex != null) {
+                this.lowIterator = orderIndex.lowPriorityIndex.iterator(tx, m.lowPriorityCursorPosition, pendingAddLimiter);
+            } else {
+                this.lowIterator = null;
+            }
+        }
 
-            @Override
-            public boolean hasNext() {
-                if (currentIterator == null) {
-                    if (highIterator != null) {
-                        if (highIterator.hasNext()) {
-                            currentIterator = highIterator;
-                            return currentIterator.hasNext();
-                        }
-                        if (defaultIterator.hasNext()) {
-                            currentIterator = defaultIterator;
-                            return currentIterator.hasNext();
-                        }
-                        if (lowIterator.hasNext()) {
-                            currentIterator = lowIterator;
-                            return currentIterator.hasNext();
-                        }
-                        return false;
-                    } else {
+        @Override
+        public boolean hasNext() {
+            if (currentIterator == null) {
+                if (highIterator != null) {
+                    if (highIterator.hasNext()) {
+                        currentIterator = highIterator;
+                        return currentIterator.hasNext();
+                    }
+                    if (defaultIterator.hasNext()) {
                         currentIterator = defaultIterator;
                         return currentIterator.hasNext();
                     }
+                    if (lowIterator.hasNext()) {
+                        currentIterator = lowIterator;
+                        return currentIterator.hasNext();
+                    }
+                    return false;
+                } else {
+                    currentIterator = defaultIterator;
+                    return currentIterator.hasNext();
                 }
+            }
+            if (highIterator != null) {
+                if (currentIterator.hasNext()) {
+                    return true;
+                }
+                if (currentIterator == highIterator) {
+                    if (defaultIterator.hasNext()) {
+                        currentIterator = defaultIterator;
+                        return currentIterator.hasNext();
+                    }
+                    if (lowIterator.hasNext()) {
+                        currentIterator = lowIterator;
+                        return currentIterator.hasNext();
+                    }
+                    return false;
+                }
+
+                if (currentIterator == defaultIterator) {
+                    if (lowIterator.hasNext()) {
+                        currentIterator = lowIterator;
+                        return currentIterator.hasNext();
+                    }
+                    return false;
+                }
+            }
+            return currentIterator.hasNext();
+        }
+
+        @Override
+        public Entry<Long, MessageKeys> next() {
+            return currentIterator.next();
+        }
+
+        @Override
+        public void remove() {
+            throw new UnsupportedOperationException();
+        }
+    }
+
+    /**
+     * Iterator that extends {@link IsolatedMessageOrderIterator} to record
+     * the last visited sequence key per priority tier into the parent
+     * {@link MessageOrderIndex}.  A subsequent
+     * {@link MessageOrderIndex#stoppedIterating()} commits those bookmarks
+     * into the destination cursor, advancing it past the visited messages.
+     */
+    static class MessageOrderIterator extends IsolatedMessageOrderIterator {
+        private final MessageOrderIndex orderIndex;
+
+        MessageOrderIterator(Transaction tx, MessageOrderCursor m,
+                MessageOrderIndex orderIndex) throws IOException {
+            super(tx, m, orderIndex);
+            this.orderIndex = orderIndex;
+        }
+
+        @Override
+        public Entry<Long, MessageKeys> next() {
+            Entry<Long, MessageKeys> result = super.next();
+            if (result != null) {
+                Long key = result.getKey();
                 if (highIterator != null) {
-                    if (currentIterator.hasNext()) {
-                        return true;
-                    }
-                    if (currentIterator == highIterator) {
-                        if (defaultIterator.hasNext()) {
-                            currentIterator = defaultIterator;
-                            return currentIterator.hasNext();
-                        }
-                        if (lowIterator.hasNext()) {
-                            currentIterator = lowIterator;
-                            return currentIterator.hasNext();
-                        }
-                        return false;
-                    }
-
                     if (currentIterator == defaultIterator) {
-                        if (lowIterator.hasNext()) {
-                            currentIterator = lowIterator;
-                            return currentIterator.hasNext();
-                        }
-                        return false;
-                    }
-                }
-                return currentIterator.hasNext();
-            }
-
-            @Override
-            public Entry<Long, MessageKeys> next() {
-                Entry<Long, MessageKeys> result = currentIterator.next();
-                if (result != null) {
-                    Long key = result.getKey();
-                    if (highIterator != null) {
-                        if (currentIterator == defaultIterator) {
-                            lastDefaultKey = key;
-                        } else if (currentIterator == highIterator) {
-                            lastHighKey = key;
-                        } else {
-                            lastLowKey = key;
-                        }
+                        orderIndex.lastDefaultKey = key;
+                    } else if (currentIterator == highIterator) {
+                        orderIndex.lastHighKey = key;
                     } else {
-                        lastDefaultKey = key;
+                        orderIndex.lastLowKey = key;
                     }
+                } else {
+                    orderIndex.lastDefaultKey = key;
                 }
-                return result;
             }
-
-            @Override
-            public void remove() {
-                throw new UnsupportedOperationException();
-            }
+            return result;
         }
     }
 
@@ -4024,7 +4103,7 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
         this.indexDirectory = indexDirectory;
     }
 
-    interface IndexAware {
+    protected interface IndexAware {
         void sequenceAssignedWithIndexLocked(long index);
     }
 
@@ -4117,6 +4196,45 @@ public abstract class MessageDatabase extends ServiceSupport implements BrokerSe
      */
     public void setEnableSubscriptionStatistics(boolean enableSubscriptionStatistics) {
         this.enableSubscriptionStatistics = enableSubscriptionStatistics;
+    }
+
+    public float getMinFreePageCompactionRatio() {
+        return minFreePageCompactionRatio;
+    }
+
+    /**
+     * The ratio of the minimum amount of free pages to keep.
+     * The default will keep a minimum of 10% of free pages, relative to the
+     * current size of the file when compaction is started.
+     *
+     * @param minFreePageCompactionRatio
+     */
+    public void setMinFreePageCompactionRatio(float minFreePageCompactionRatio) {
+        this.minFreePageCompactionRatio = minFreePageCompactionRatio;
+    }
+
+    public float getMaxFreePageCompactionRatio() {
+        return maxFreePageCompactionRatio;
+    }
+
+    /**
+     * The ratio of the maximum amount of free pages to allow before triggering compaction.
+     * The default will trigger a compaction attempt if the percentage of free pages
+     * hits 30% of the total file size.
+     *
+     * @param maxFreePageCompactionRatio
+     */
+    public void setMaxFreePageCompactionRatio(float maxFreePageCompactionRatio) {
+        this.maxFreePageCompactionRatio = maxFreePageCompactionRatio;
+    }
+
+    public PageFileCompactionStrategy getIndexCompactionStrategy() {
+        return indexCompactionStrategy;
+    }
+
+    public void setIndexCompactionStrategy(
+            PageFileCompactionStrategy indexCompactionStrategy) {
+        this.indexCompactionStrategy = indexCompactionStrategy;
     }
 
     private static class MessageDatabaseObjectInputStream extends ObjectInputStream {

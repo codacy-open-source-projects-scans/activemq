@@ -17,6 +17,7 @@
 package org.apache.activemq.network;
 
 import java.net.URI;
+import java.util.Optional;
 
 import org.apache.activemq.transport.Transport;
 import org.apache.activemq.transport.TransportFactory;
@@ -77,6 +78,12 @@ public class MulticastNetworkConnector extends NetworkConnector {
         this.remoteTransport = remoteTransport;
     }
 
+    // Satisfies the abstract getUri() contract from NetworkConnector; delegates to getRemoteURI()
+    @Override
+    public URI getUri() {
+        return getRemoteURI();
+    }
+
     public URI getRemoteURI() {
         return remoteURI;
     }
@@ -97,7 +104,8 @@ public class MulticastNetworkConnector extends NetworkConnector {
             if (remoteURI == null) {
                 throw new IllegalArgumentException("You must specify the remoteURI property");
             }
-            remoteTransport = TransportFactory.connect(remoteURI);
+            remoteTransport = TransportFactory.connect(remoteURI,
+                    Optional.ofNullable(getSslContext()).orElse(getBrokerService().getSslContext()));
         }
 
         if (localTransport == null) {

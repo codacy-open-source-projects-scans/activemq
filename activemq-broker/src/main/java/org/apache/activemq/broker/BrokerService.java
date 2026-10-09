@@ -68,6 +68,7 @@ import org.apache.activemq.broker.jmx.ManagementContext;
 import org.apache.activemq.broker.jmx.NetworkConnectorView;
 import org.apache.activemq.broker.jmx.NetworkConnectorViewMBean;
 import org.apache.activemq.broker.jmx.ProxyConnectorView;
+import org.apache.activemq.broker.jmx.TransportConnectorPolicyMBean;
 import org.apache.activemq.broker.region.CompositeDestinationInterceptor;
 import org.apache.activemq.broker.region.Destination;
 import org.apache.activemq.broker.region.DestinationFactory;
@@ -269,6 +270,7 @@ public class BrokerService implements Service {
     private final List<Runnable> preShutdownHooks = new CopyOnWriteArrayList<>();
 
     private int maxUncommittedCount = DEFAULT_MAX_UNCOMMITTED_COUNT;
+    private int maxInflatedDataSize = OpenWireFormat.DEFAULT_MAX_INFLATED_DATA_SIZE;
 
     static {
 
@@ -328,7 +330,9 @@ public class BrokerService implements Service {
     }
 
     /**
-     * Adds a new transport connector for the given bind address
+     * Adds a new transport connector for the given bind address.
+     * Binds immediately using the broker-wide sslContext; for a per-connector
+     * sslContext build a TransportConnector and use {@link #addConnector(TransportConnector)}.
      *
      * @return the newly created and added transport connector
      */
@@ -337,7 +341,9 @@ public class BrokerService implements Service {
     }
 
     /**
-     * Adds a new transport connector for the given bind address
+     * Adds a new transport connector for the given bind address.
+     * Binds immediately using the broker-wide sslContext; for a per-connector
+     * sslContext build a TransportConnector and use {@link #addConnector(TransportConnector)}.
      *
      * @return the newly created and added transport connector
      */
@@ -459,6 +465,7 @@ public class BrokerService implements Service {
     public ProxyConnector addProxyConnector(ProxyConnector connector) throws Exception {
         URI uri = getVmConnectorURI();
         connector.setLocalUri(uri);
+        connector.setBrokerService(this);
         proxyConnectors.add(connector);
         if (isUseJmx()) {
             registerProxyConnectorMBean(connector);
@@ -733,8 +740,18 @@ public class BrokerService implements Service {
         }
     }
 
+    // Ensure the broker chain is fully initialized and we create the admin connection.
+    // The admin connection is needed to create destinations and for the AdvisoryBroker
+    // before broker startup. Creating the connection will also call the
+    // setAdminConnectionContext() callback on the Broker chain. This ensures initialization
+    // is done correctly even if someone overrides getAdminConnectionContext();
+    private void initializeAdminConnection() throws Exception {
+        BrokerSupport.getConnectionContext(getBroker());
+    }
+
     private void doStartBroker() throws Exception {
         checkStartException();
+        initializeAdminConnection();
         startDestinations();
         addShutdownHook();
 
@@ -2261,16 +2278,50 @@ public class BrokerService implements Service {
             connector = connector.asManagedConnector(getManagementContext(), objectName);
             ConnectorViewMBean view = new ConnectorView(connector);
             AnnotatedMBean.registerMBean(getManagementContext(), view, objectName);
+            if (connector.getTransportConnectorPolicy() instanceof TransportConnectorPolicyMBean) {
+                var policy = (TransportConnectorPolicyMBean) connector.getTransportConnectorPolicy();
+                registerTransportConnectorPolicyMBean(policy,
+                        BrokerMBeanSupport.createTransportConnectorPolicyName(objectName, policy.getName()));
+            }
             return connector;
         } catch (Throwable e) {
             throw IOExceptionSupport.create("Transport Connector could not be registered in JMX: " + e, e);
         }
     }
 
+    /**
+     * Registers the policy under the most derived TransportConnectorPolicyMBean
+     * interface it implements, so a policy such as RemoteAddressConnectorPolicy
+     * surfaces its full management view and not just the common attributes. The
+     * policy class and its MBean interface live in different packages, so the
+     * standard MBean naming convention cannot resolve the interface on its own.
+     */
+    @SuppressWarnings({ "unchecked", "rawtypes" })
+    private void registerTransportConnectorPolicyMBean(TransportConnectorPolicyMBean policy, ObjectName policyObjectName) throws Exception {
+        Class mbeanInterface = TransportConnectorPolicyMBean.class;
+        for (Class<?> type = policy.getClass(); type != null; type = type.getSuperclass()) {
+            for (Class<?> iface : type.getInterfaces()) {
+                if (TransportConnectorPolicyMBean.class.isAssignableFrom(iface) && mbeanInterface.isAssignableFrom(iface)) {
+                    mbeanInterface = iface;
+                }
+            }
+        }
+        getManagementContext().registerMBean(new AnnotatedMBean(policy, mbeanInterface, policyObjectName), policyObjectName);
+    }
+
     protected void unregisterConnectorMBean(TransportConnector connector) throws IOException {
         if (isUseJmx()) {
             try {
                 ObjectName objectName = createConnectorObjectName(connector);
+                if (connector.getTransportConnectorPolicy() instanceof TransportConnectorPolicyMBean) {
+                    var policy = (TransportConnectorPolicyMBean) connector.getTransportConnectorPolicy();
+                    try {
+                        getManagementContext().unregisterMBean(
+                                BrokerMBeanSupport.createTransportConnectorPolicyName(objectName, policy.getName()));
+                    } catch (Throwable e) {
+                        LOG.debug("Transport server policy MBean for connector {} was not unregistered", connector.getName(), e);
+                    }
+                }
                 getManagementContext().unregisterMBean(objectName);
             } catch (Throwable e) {
                 throw IOExceptionSupport.create(
@@ -2442,12 +2493,12 @@ public class BrokerService implements Service {
     /**
      * Strategy method to add interceptors to the broker
      *
-     * @throws IOException
+     * @throws Exception
      */
     protected Broker addInterceptors(Broker broker) throws Exception {
         if (isAdvisorySupport()) {
             // AMQ-9187 - the AdvisoryBroker must be after the SchedulerBroker
-            broker = new AdvisoryBroker(broker);
+            broker = createAdvisoryBroker(broker);
         }
         if (isSchedulerSupport()) {
             SchedulerBroker sb = new SchedulerBroker(this, broker, getJobSchedulerStore());
@@ -2513,6 +2564,10 @@ public class BrokerService implements Service {
         } else {
             return new MemoryPersistenceAdapter();
         }
+    }
+
+    protected AdvisoryBroker createAdvisoryBroker(Broker broker) {
+        return new AdvisoryBroker(broker);
     }
 
     protected ObjectName createBrokerObjectName() throws MalformedObjectNameException  {
@@ -3335,4 +3390,17 @@ public class BrokerService implements Service {
         this.maxUncommittedCount = maxUncommittedCount;
     }
 
+    public int getMaxInflatedDataSize() {
+        return maxInflatedDataSize;
+    }
+
+    /**
+     * Set the maximum size that a compressed message can inflate to
+     * if a message has to be decompressed.
+     *
+     * @param maxInflatedDataSize
+     */
+    public void setMaxInflatedDataSize(int maxInflatedDataSize) {
+        this.maxInflatedDataSize = maxInflatedDataSize;
+    }
 }

@@ -32,6 +32,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertThrows;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 
@@ -583,8 +584,31 @@ public class JMSMappingOutboundTransformerTest {
     }
 
     @Test
+    public void testConvertCompressedObjectMessageToAmqpMessageByte255() throws Exception {
+        // This specific UUID tests a decompression edge case found for Objects messages and
+        // is used to verify AmqpMessageSupport.getBinaryFromMessageBody() is correct.
+        //
+        // Previously the decompression could stop early and not decompress the entire stream of
+        // data. This was due to the loop incorrectly casting the read int from the inflater
+        // stream as a byte before comparing to -1 to look for end of stream.
+        //
+        // This is incorrect because the read() method can return a value between -1 and 255.
+        // Java uses Two's Complement to represent signed ints, so if the returned value int
+        // is 255 and is cast to a byte it becomes -1. This meant that reading 255 would return -1
+        // leading to the code to exit thinking end of stream has been reached.
+        //
+        // This particular UUID includes a byte of 255 when decompressed to test this edge case.
+        testConvertCompressedObjectMessageToAmqpMessageWithDataBody(
+                UUID.fromString("14faffdc-387d-4e2e-8b44-748d47eaaf06"));
+    }
+
+    @Test
     public void testConvertCompressedObjectMessageToAmqpMessageWithDataBody() throws Exception {
-        ActiveMQObjectMessage outbound = createObjectMessage(TEST_OBJECT_VALUE, true);
+        testConvertCompressedObjectMessageToAmqpMessageWithDataBody(TEST_OBJECT_VALUE);
+    }
+
+    private void testConvertCompressedObjectMessageToAmqpMessageWithDataBody(UUID uuid) throws Exception {
+        ActiveMQObjectMessage outbound = createObjectMessage(uuid, true);
         outbound.onSend();
         outbound.storeContent();
 
@@ -757,8 +781,23 @@ public class JMSMappingOutboundTransformerTest {
 
     @Test
     public void testConvertCompressedTextMessageCreatesDataSectionBody() throws Exception {
+        ActiveMQTextMessage outbound = createTextMessage("myTextMessageContent", true);
+        ActiveMQConnection connection = Mockito.mock(ActiveMQConnection.class);
+        Mockito.when(connection.isUseCompression()).thenReturn(true);
+        // override to trigger an error with decompression
+        Mockito.when(connection.getMaxInflatedDataSize()).thenReturn(10);
+        outbound.setConnection(connection);
+        assertThrows(JMSException.class, () -> testConvertCompressedTextMessageCreatesDataSectionBody(outbound));
+    }
+
+    @Test
+    public void testConvertCompressedTextMessageCreatesDataSectionBodyMaxInflatedSize() throws Exception {
+        ActiveMQTextMessage outbound = createTextMessage("myTextMessageContent", true);
+        testConvertCompressedTextMessageCreatesDataSectionBody(outbound);
+    }
+
+    private void testConvertCompressedTextMessageCreatesDataSectionBody(ActiveMQTextMessage outbound) throws Exception {
         String contentString = "myTextMessageContent";
-        ActiveMQTextMessage outbound = createTextMessage(contentString, true);
         outbound.setShortProperty(JMS_AMQP_ORIGINAL_ENCODING, AMQP_DATA);
         outbound.onSend();
         outbound.storeContent();
@@ -778,7 +817,8 @@ public class JMSMappingOutboundTransformerTest {
         String contents = new String(data.getArray(), data.getArrayOffset(), data.getLength(), StandardCharsets.UTF_8);
         assertEquals(contentString, contents);
     }
-    
+
+
     @Test 
     public void testConvertConnectionInfo() throws Exception {
     	String connectionId = "myConnectionId";
@@ -1017,6 +1057,7 @@ public class JMSMappingOutboundTransformerTest {
         if (compression) {
             ActiveMQConnection connection = Mockito.mock(ActiveMQConnection.class);
             Mockito.when(connection.isUseCompression()).thenReturn(true);
+            Mockito.when(connection.getMaxInflatedDataSize()).thenReturn(Integer.MAX_VALUE);
             message.setConnection(connection);
         }
 
@@ -1033,6 +1074,7 @@ public class JMSMappingOutboundTransformerTest {
         if (compression) {
             ActiveMQConnection connection = Mockito.mock(ActiveMQConnection.class);
             Mockito.when(connection.isUseCompression()).thenReturn(true);
+            Mockito.when(connection.getMaxInflatedDataSize()).thenReturn(Integer.MAX_VALUE);
             message.setConnection(connection);
         }
 
@@ -1049,6 +1091,7 @@ public class JMSMappingOutboundTransformerTest {
         if (compression) {
             ActiveMQConnection connection = Mockito.mock(ActiveMQConnection.class);
             Mockito.when(connection.isUseCompression()).thenReturn(true);
+            Mockito.when(connection.getMaxInflatedDataSize()).thenReturn(Integer.MAX_VALUE);
             message.setConnection(connection);
         }
 
@@ -1069,6 +1112,7 @@ public class JMSMappingOutboundTransformerTest {
         if (compression) {
             ActiveMQConnection connection = Mockito.mock(ActiveMQConnection.class);
             Mockito.when(connection.isUseCompression()).thenReturn(true);
+            Mockito.when(connection.getMaxInflatedDataSize()).thenReturn(Integer.MAX_VALUE);
             result.setConnection(connection);
         }
 
@@ -1103,6 +1147,7 @@ public class JMSMappingOutboundTransformerTest {
         if (compression) {
             ActiveMQConnection connection = Mockito.mock(ActiveMQConnection.class);
             Mockito.when(connection.isUseCompression()).thenReturn(true);
+            Mockito.when(connection.getMaxInflatedDataSize()).thenReturn(Integer.MAX_VALUE);
             result.setConnection(connection);
         }
 

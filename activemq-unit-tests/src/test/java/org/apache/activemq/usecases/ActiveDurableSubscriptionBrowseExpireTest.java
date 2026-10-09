@@ -35,6 +35,8 @@ import org.apache.activemq.ActiveMQConnectionFactory;
 import org.apache.activemq.TestSupport.PersistenceAdapterChoice;
 import org.apache.activemq.broker.BrokerService;
 import org.apache.activemq.broker.jmx.DurableSubscriptionViewMBean;
+import org.apache.activemq.broker.region.policy.PolicyEntry;
+import org.apache.activemq.broker.region.policy.PolicyMap;
 import org.apache.activemq.store.MessageRecoveryListener;
 import org.apache.activemq.store.PersistenceAdapter;
 import org.apache.activemq.store.TopicMessageStore;
@@ -67,6 +69,17 @@ public class ActiveDurableSubscriptionBrowseExpireTest extends DurableSubscripti
     @Override
     public PersistenceAdapter setDefaultPersistenceAdapter(BrokerService broker) throws IOException {
         return super.setPersistenceAdapter(broker, PersistenceAdapterChoice.MEM);
+    }
+
+    @Override
+    public void configurePlugins(BrokerService broker) throws Exception {
+        // Disable the periodic expiry task so the JMX browse is the only expiry
+        // trigger and the expired count is deterministic
+        PolicyEntry policy = new PolicyEntry();
+        policy.setExpireMessagesPeriod(0);
+        PolicyMap policyMap = new PolicyMap();
+        policyMap.setDefaultEntry(policy);
+        broker.setDestinationPolicy(policyMap);
     }
 
     @Override
@@ -144,8 +157,13 @@ public class ActiveDurableSubscriptionBrowseExpireTest extends DurableSubscripti
         // browse (should | should not) expire the messages on the destination if expiration is (enabled | not enabled)
         data = sub.browse();
         assertNotNull(data);
-        assertEquals(enableExpiration ? messagesToExpire.size() : 0, dest.getDestinationStatistics().getExpired().getCount());
-        
+
+        if (enableExpiration) {
+            assertEquals(messagesToExpire.size(), dest.getDestinationStatistics().getExpired().getCount());
+        } else {
+            assertEquals(0L, dest.getDestinationStatistics().getExpired().getCount());
+        }
+
         session.close();
         con.close();
     }

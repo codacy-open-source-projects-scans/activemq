@@ -22,7 +22,7 @@
   <parent>
     <groupId>org.apache.activemq</groupId>
     <artifactId>activemq-parent</artifactId>
-    <version>6.3.0-SNAPSHOT</version>
+    <version>6.4.0-SNAPSHOT</version>
   </parent>
 
   <artifactId>activemq-amqp</artifactId>
@@ -118,7 +118,14 @@
     </dependency>
     <dependency>
       <groupId>org.eclipse.jetty.websocket</groupId>
-      <artifactId>websocket-jetty-server</artifactId>
+      <artifactId>jetty-websocket-jetty-server</artifactId>
+      <scope>test</scope>
+    </dependency>
+    <!-- activemq-http's WSTransportServer uses the Jetty EE9 websocket ServletContainerInitializer;
+         activemq-http declares it provided+optional, so the ws transport needs it at test runtime here. -->
+    <dependency>
+      <groupId>org.eclipse.jetty.ee11.websocket</groupId>
+      <artifactId>jetty-ee11-websocket-jetty-server</artifactId>
       <scope>test</scope>
     </dependency>
     <dependency>
@@ -189,7 +196,7 @@
       <plugin>
         <groupId>org.apache.maven.plugins</groupId>
         <artifactId>maven-surefire-plugin</artifactId>
-        <version>${surefire.version}</version>
+        <version>${maven-surefire-plugin-version}</version>
         <configuration>
           <argLine>${surefire.argLine}</argLine>
           <runOrder>alphabetical</runOrder>
@@ -245,7 +252,7 @@
           <dependency>
             <groupId>org.apache.maven.surefire</groupId>
             <artifactId>surefire-junit47</artifactId>
-            <version>${surefire.version}</version>
+            <version>${maven-surefire-plugin-version}</version>
           </dependency>
           <dependency>
             <groupId>me.fabriciorby</groupId>
